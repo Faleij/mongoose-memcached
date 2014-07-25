@@ -4,6 +4,7 @@ var Memcached = require('memcached');
 var mongooseMemcached = require('../'),
     mongoose = require('mongoose'),
     Schema = mongoose.Schema,
+    ObjectId = mongoose.Types.ObjectId,
     PeopleSchema,
     People,
     _memcached,
@@ -40,7 +41,8 @@ describe('mongoose-memcached', function() {
         "default": Date.now()
       },
       num: Number,
-      test: Boolean
+      test: Boolean,
+      peer: { type: Schema.Types.ObjectId, ref: 'People' }
     });
 
     People = mongoose.model('People', PeopleSchema);
@@ -49,13 +51,20 @@ describe('mongoose-memcached', function() {
   function generate (amount, fn) {
     var crowd = [];
     var count = 0;
+    var id = ObjectId(), prevId;
     while (count < amount) {
+      prevId = id;
+      id = ObjectId();
       crowd.push({
+        _id: id,
         name: names[Math.floor(Math.random() * names.length)],
-        num: Math.random() * 10000
+        num: Math.random() * 10000,
+        peer: prevId
       });
       count++;
     }
+    crowd[0].peer = crowd[count - 1]._id;
+    
     People.create(crowd, fn);
   }
 
@@ -140,7 +149,36 @@ describe('mongoose-memcached', function() {
       });
     });
   });
-    
+  
+  it('should cache model.populate if cache option is used', function (done) {
+    var query = People.findOne({});
+    query.cache(true, 2);
+    query.populate({ path: 'peer', options: { cache: true, ttl: 2 } });
+    query.exec(function (err, doc) {
+      if (err) {
+        return done(err);
+      }
+      expect(query.isFromCache).to.be(false);
+      expect(doc.peer).to.be.ok();
+      expect(doc.peer).to.be.a('object');
+      var peer = doc.peer;
+      query = People.findOne({});
+      query.populate({ path: 'peer', options: { cache: true, ttl: 2 } });
+      query.exec(function (err, doc) {
+        if (err) {
+          return done(err);
+        }
+        if (doc) {
+          expect(query.isFromCache).to.be(false);
+          expect(doc.peer).to.be.ok();
+          expect(doc.peer).to.be.a('object');
+          expect(doc.peer.toObject()).to.eql(peer.toObject());
+          done();
+        }
+      });
+    });
+  });
+  
   it('should cache findOne query if the `cache` method is called', function (done) {
     var self = this;
     var query = People.findOne({});
